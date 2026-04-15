@@ -1,67 +1,148 @@
-import os
-import logging
-from dotenv import load_dotenv
+"""
+runrag.py
+=========
+Main entry point. Two modes:
 
-# Import our custom modules
-from loaddoc import load_and_chunk_documents
-from vectorize import save_chunks_to_qdrant
-from retrieving import get_reranking_retriever
-from llm import build_rag_pipeline
+  1. --ingest   Load PDFs → semantic chunk → embed → save to Qdrant
+  2. --chat     Interactive Q&A loop with full RAG + memory
+
+Usage:
+  python runrag.py --ingest              # populate Qdrant from docs/
+  python runrag.py --chat                # start chatting
+  python runrag.py --ingest --chat       # ingest first, then chat
+  python runrag.py --chat --question "What is the revenue in 2023?"  # one-shot
+"""
+
+import argparse
+import logging
+import sys
 
 logging.basicConfig(
     level=logging.INFO,
-
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    datefmt="%H:%M:%S",
 )
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
 
-def main():
-    # 1. Load Environment Variables (OPENAI_API_KEY, COHERE_API_KEY)
-    load_dotenv()
-    
-    if not os.getenv("OPENAI_API_KEY") or not os.getenv("COHERE_API_KEY"):
-        logger.error("Missing required API keys in .env file.")
+
+# ── Ingest pipeline ────────────────────────────────────────────────────────────
+
+def run_ingest(docs_dir: str) -> None:
+    """Full ingestion: PDF → semantic chunks → embeddings → Qdrant."""
+    from loaddoc import load_pdfs, semantic_chunk
+    from embedder import embed_chunks
+    from vectorstore import save_to_vectorstore
+
+    log.info("=== INGEST MODE ===")
+
+    pages = load_pdfs(docs_dir)
+    if not pages:
+        log.error("No pages loaded. Add PDF files to %s and retry.", docs_dir)
+        sys.exit(1)
+
+    chunks = semantic_chunk(pages)
+    if not chunks:
+        log.error("No chunks produced. Check your documents.")
+        sys.exit(1)
+
+    clean_chunks, embedding_model = embed_chunks(chunks)
+    vectorstore = save_to_vectorstore(clean_chunks, embedding_model)
+
+    log.info("Ingest complete. %d chunks are now in Qdrant.", len(clean_chunks))
+    return vectorstore
+
+
+# ── Chat loop ──────────────────────────────────────────────────────────────────
+
+def run_chat(vectorstore=None, one_shot_question: str | None = None) -> None:
+    """
+    Interactive conversation loop.
+    Short-term and long-term memories are active for the full session.
+    Type 'exit' or 'quit' to end the session.
+    """
+    from llm import build_rag_chain
+
+    log.info("=== CHAT MODE ===")
+    chain = build_rag_chain(vectorstore)
+
+    if one_shot_question:
+        # Non-interactive mode: answer one question and exit
+        print(f"\nQ: {one_shot_question}\nA: ", end="", flush=True)
+        for token in chain.stream({"question": one_shot_question}):
+            print(token, end="", flush=True)
+        print("\n")
         return
 
-    # Path to sample document (Update this path to a real PDF you have)
-    doc_path = "sample_document.pdf"
-    if not os.path.exists(doc_path):
-        logger.error(f"Please provide a valid document at {doc_path}")
-        return
+    # Interactive session
+    print("\n" + "=" * 60)
+    print("  RAG Assistant — type 'exit' to quit")
+    print("=" * 60)
+    print("  Short-term memory: last 5 turns")
+    print("  Long-term memory : Qdrant-backed semantic search")
+    print("=" * 60 + "\n")
 
-    try:
-        # Step 1: Load and Semantically Chunk the Document
-        chunks = load_and_chunk_documents(doc_path)
-        
-        # Step 2: Embed and Save to Qdrant
-        # (For repeated runs, you'd check if the index exists to skip ingestion)
-        vector_store = save_chunks_to_qdrant(chunks)
-        
-        # Step 3: Setup Retriever with Reranking
-        retriever = get_reranking_retriever(vector_store)
-        
-        # Step 4: Build the LLM Chain
-        rag_chain = build_rag_pipeline(retriever)
-        
-        # Step 5: Execute Query
-        query = "What is the main topic discussed in the document?"
-        logger.info(f"Executing query: '{query}'")
-        
-        response = rag_chain.invoke({"input": query})
-        
-        print("\n" + "="*50)
-        print("QUERY:", query)
-        print("-" * 50)
-        print("ANSWER:", response["answer"])
-        print("="*50 + "\n")
-        
-        # Production debugging: View which chunks the reranker selected
-        print("Top Reranked Context Used:")
-        for i, doc in enumerate(response["context"]):
-            print(f"\n[Source {i+1}] {doc.page_content[:200]}...")
+    while True:
+        try:
+            question = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nGoodbye.")
+            break
 
-    except Exception as e:
-        logger.error(f"Pipeline failed: {e}")
+        if not question:
+            continue
+        if question.lower() in {"exit", "quit", "q"}:
+            print("Goodbye.")
+            break
+
+        print("\nAssistant: ", end="", flush=True)
+        try:
+            for token in chain.stream({"question": question}):
+                print(token, end="", flush=True)
+        except Exception as exc:
+            log.exception("Chain error: %s", exc)
+        print("\n")
+
+
+# ── CLI ────────────────────────────────────────────────────────────────────────
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="RAG system — ingest PDFs and chat with your documents"
+    )
+    parser.add_argument(
+        "--ingest",
+        action="store_true",
+        help="Load PDFs from docs/, chunk, embed, and save to Qdrant",
+    )
+    parser.add_argument(
+        "--chat",
+        action="store_true",
+        help="Start interactive Q&A session",
+    )
+    parser.add_argument(
+        "--docs-dir",
+        default="./docs",
+        help="Path to folder containing PDF files (default: ./docs)",
+    )
+    parser.add_argument(
+        "--question",
+        default=None,
+        help="Ask a single question (non-interactive) and exit",
+    )
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+
+    if not args.ingest and not args.chat and not args.question:
+        print("Specify --ingest, --chat, or --question. Use --help for options.")
+        sys.exit(0)
+
+    vectorstore = None
+
+    if args.ingest:
+        vectorstore = run_ingest(args.docs_dir)
+
+    if args.chat or args.question:
+        run_chat(vectorstore=vectorstore, one_shot_question=args.question)
