@@ -225,3 +225,8 @@ docker run -p 8000:8000 \
   -e QDRANT_URL=http://host.docker.internal:6333 \
   react-agent
 ```
+
+
+python .\ragge\run.py --ingest  
+
+python .\ragge\run.py --chat

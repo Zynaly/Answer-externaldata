@@ -2,35 +2,37 @@ import logging
 from typing import Generator
 
 from langchain_core.documents import Document
-from langchain_openai import OpenAIEmbeddings
+# from langchain_openai import OpenAIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import sys
 import os
 
 # Add project root (Answer-externaldata) to Python path
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(ROOT_DIR)
-from config.config import EMBEDDING_BATCH_SIZE, EMBEDDING_MODEL, OPENAI_API_KEY
+from config.config import EMBEDDING_BATCH_SIZE, EMBEDDING_MODEL
 
 log = logging.getLogger(__name__)
 
 
 # ── Embeddings model (singleton, reused across calls) ──────────────────────────
 
-def get_embedding_model() -> OpenAIEmbeddings:
-    """
-    Return a configured OpenAIEmbeddings instance.
-    LangChain handles batching and rate-limit retries internally.
-    """
-    return OpenAIEmbeddings(
-        model=EMBEDDING_MODEL,
-        openai_api_key=OPENAI_API_KEY,
-        chunk_size=EMBEDDING_BATCH_SIZE,
+# def get_embedding_model() -> OpenAIEmbeddings:
+#     return OpenAIEmbeddings(
+#         model=EMBEDDING_MODEL,
+#         openai_api_key=OPENAI_API_KEY,
+#         chunk_size=EMBEDDING_BATCH_SIZE,
+#     )
+def get_embedding_model() -> HuggingFaceEmbeddings:
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={"device": "cpu"},  # or "cuda" if GPU
+        encode_kwargs={"normalize_embeddings": True},
     )
 
-
 # ── Embed chunks ───────────────────────────────────────────────────────────────
-
-def embed_chunks(chunks: list[Document]) -> tuple[list[Document], OpenAIEmbeddings]:
+from typing import Any
+def embed_chunks(chunks: list[Document]) -> tuple[list[Document], Any]:
 
     if not chunks:
         log.warning("No chunks provided to embed.")

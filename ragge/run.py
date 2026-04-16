@@ -16,6 +16,11 @@ Usage:
 import argparse
 import logging
 import sys
+import os
+
+# Add project root (Answer-externaldata) to Python path
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(ROOT_DIR)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -60,15 +65,18 @@ def run_chat(vectorstore=None, one_shot_question: str | None = None) -> None:
     Short-term and long-term memories are active for the full session.
     Type 'exit' or 'quit' to end the session.
     """
-    from llm import build_rag_chain
+    from agent.llm import build_rag_chain
 
     log.info("=== CHAT MODE ===")
     chain = build_rag_chain(vectorstore)
 
+    # ── Session config required by RunnableWithMessageHistory ─────────────────
+    session_config = {"configurable": {"session_id": "main-session"}}
+
     if one_shot_question:
         # Non-interactive mode: answer one question and exit
         print(f"\nQ: {one_shot_question}\nA: ", end="", flush=True)
-        for token in chain.stream({"question": one_shot_question}):
+        for token in chain.stream({"question": one_shot_question}, config=session_config):
             print(token, end="", flush=True)
         print("\n")
         return
@@ -96,7 +104,7 @@ def run_chat(vectorstore=None, one_shot_question: str | None = None) -> None:
 
         print("\nAssistant: ", end="", flush=True)
         try:
-            for token in chain.stream({"question": question}):
+            for token in chain.stream({"question": question}, config=session_config):
                 print(token, end="", flush=True)
         except Exception as exc:
             log.exception("Chain error: %s", exc)

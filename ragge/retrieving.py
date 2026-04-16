@@ -1,63 +1,40 @@
-"""
-retriever.py
-============
-Responsibility: Given a user query, retrieve the most relevant chunks
-from Qdrant and re-rank them for precision before passing to the LLM.
-
-Two-stage retrieval:
-  Stage 1 — Vector retriever  (recall)
-    Fast approximate nearest-neighbour search in Qdrant.
-    Returns top-k candidates by cosine similarity.
-    Optimised for recall: we over-fetch (fetch_k > k) on purpose.
-
-  Stage 2 — Cross-encoder reranker  (precision)
-    A small cross-encoder model (BAAI/bge-reranker-base) scores every
-    (query, chunk) pair together — capturing query-document interaction
-    that bi-encoder embeddings miss.
-    We then keep only the top final_k results.
-
-Why rerank?
-  Embedding similarity is fast but shallow. "Apple revenue" and
-  "Apple fruit nutrition" have similar embeddings but very different
-  relevance to a financial question. The cross-encoder re-reads both
-  query and document together and catches this.
-
-Memory integration:
-  Short-term memory — ConversationBufferWindowMemory (last N turns).
-    Keeps recent context so follow-up questions like "and what about Q3?"
-    resolve correctly without re-stating the topic.
-
-  Long-term memory — VectorStoreRetrieverMemory backed by Qdrant.
-    Stores every (input, output) exchange as a vector. On each new query
-    the K most semantically similar past exchanges are retrieved and
-    injected into the prompt, giving the LLM access to relevant history
-    even from sessions days ago.
-"""
-
 import logging
 
-from langchain.memory import (
-    CombinedMemory,
-    ConversationBufferWindowMemory,
-    VectorStoreRetrieverMemory,
-)
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_classic.retrievers import ContextualCompressionRetriever
+from langchain_classic.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain_core.documents import Document
 
-from config import (
+from config.config import (
     RERANKER_MODEL,
     RETRIEVER_FETCH_K,
     RETRIEVER_FINAL_K,
     RETRIEVER_SEARCH_TYPE,
 )
 from vectorstore import load_vectorstore
-
+ 
 log = logging.getLogger(__name__)
 
 
 # ── Stage 1: Vector retriever ──────────────────────────────────────────────────
+
+
+# ── Memory ─────────────────────────────────────────────────────────────────────
+
+from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_core.chat_history import BaseChatMessageHistory
+
+_store = {}
+
+def build_memory(vectorstore=None):
+    """Simple in-memory session store compatible with RunnableWithMessageHistory."""
+    def get_session_history(session_id: str) -> BaseChatMessageHistory:
+        if session_id not in _store:
+            _store[session_id] = ChatMessageHistory()
+        return _store[session_id]
+    
+    log.info("Memory ready (in-memory session store)")
+    return get_session_history
 
 def build_vector_retriever(vectorstore=None):
     """
@@ -99,7 +76,7 @@ def build_reranker_retriever(base_retriever) -> ContextualCompressionRetriever:
       - ~568M params, strong on English retrieval benchmarks.
       - Swap for bge-reranker-large for higher quality at ~2× latency.
 
-    The ContextualCompressionRetriever calls base_retriever.get_relevant_documents()
+    The ContextualCompressionRetriever calls base_retriever.invoke()
     first, then passes all results through the CrossEncoderReranker which scores
     and re-orders them, finally keeping only top_n=RETRIEVER_FINAL_K.
     """
@@ -117,69 +94,6 @@ def build_reranker_retriever(base_retriever) -> ContextualCompressionRetriever:
         RETRIEVER_FINAL_K,
     )
     return reranker_retriever
-
-
-# ── Short-term memory ──────────────────────────────────────────────────────────
-
-def build_short_term_memory(k: int = 5) -> ConversationBufferWindowMemory:
-    """
-    Sliding window over the last k conversation turns.
-
-    k=5 means the LLM sees the last 5 human+AI exchanges.
-    Prevents the context window from growing unboundedly in long sessions.
-
-    memory_key must match the variable name used in the prompt template
-    (see prompts.py → {short_term_history}).
-    """
-    return ConversationBufferWindowMemory(
-        k=k,
-        memory_key="short_term_history",
-        input_key="question",
-        return_messages=True,
-    )
-
-
-# ── Long-term memory ───────────────────────────────────────────────────────────
-
-def build_long_term_memory(vectorstore=None) -> VectorStoreRetrieverMemory:
-    """
-    Semantic long-term memory backed by Qdrant.
-
-    On every turn:
-      SAVE  → the (human input, AI output) pair is embedded and stored in Qdrant
-              under a dedicated collection key.
-      LOAD  → before generating a response, the K most semantically similar
-              past exchanges are retrieved and injected into the prompt.
-
-    This means the model can "remember" relevant facts from previous sessions
-    without hitting a context-window limit.
-
-    memory_key must match {long_term_history} in prompts.py.
-    """
-    vs = vectorstore or load_vectorstore()
-    memory_retriever = vs.as_retriever(search_kwargs={"k": 3})
-    return VectorStoreRetrieverMemory(
-        retriever=memory_retriever,
-        memory_key="long_term_history",
-        input_key="question",
-    )
-
-
-# ── Combined memory ────────────────────────────────────────────────────────────
-
-def build_memory(vectorstore=None) -> CombinedMemory:
-    """
-    Merge short-term and long-term memory into one object.
-
-    CombinedMemory passes both memory_keys to the prompt:
-      {short_term_history}  — last N raw messages
-      {long_term_history}   — semantically relevant past exchanges
-    """
-    short_mem = build_short_term_memory(k=5)
-    long_mem  = build_long_term_memory(vectorstore)
-    combined  = CombinedMemory(memories=[short_mem, long_mem])
-    log.info("Memory ready: short-term (window=5) + long-term (Qdrant-backed)")
-    return combined
 
 
 # ── Full retrieval pipeline ────────────────────────────────────────────────────
@@ -200,7 +114,10 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     retriever = build_retriever()
     query     = "What is the main topic of the documents?"
-    results: list[Document] = retriever.get_relevant_documents(query)
+    
+    # Modern LangChain uses .invoke() instead of .get_relevant_documents()
+    results: list[Document] = retriever.invoke(query)
+    
     print(f"\nQuery: {query}")
     print(f"Retrieved {len(results)} chunks after reranking:\n")
     for i, doc in enumerate(results, 1):

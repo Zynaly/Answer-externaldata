@@ -1,16 +1,3 @@
-"""
-loader.py
-=========
-Responsibility: Load PDF files from docs/ folder and split them into
-semantically coherent chunks using SemanticChunker.
-
-Why SemanticChunker over RecursiveCharacterTextSplitter?
-  - Fixed-size splitting cuts mid-sentence and mid-thought.
-  - SemanticChunker embeds every sentence, measures cosine distance
-    between consecutive sentences, and only cuts where the topic actually
-    changes. Result: chunks that are self-contained units of meaning.
-"""
-
 import hashlib
 import logging
 import sys
@@ -18,7 +5,8 @@ from pathlib import Path
 
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
-from langchain_experimental.text_splitter import SemanticChunker
+# from langchain_experimental.text_splitter import SemanticChunker
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 
 import sys
@@ -41,14 +29,6 @@ log = logging.getLogger(__name__)
 # ── PDF Loader ─────────────────────────────────────────────────────────────────
 
 def load_pdfs(docs_dir: str = DOCS_DIR) -> list[Document]:
-    """
-    Recursively load every PDF from docs_dir.
-    Each page becomes a Document with enriched metadata:
-      - source      : full file path
-      - filename    : file name only
-      - page        : page number (0-indexed)
-      - content_hash: MD5 of page text (used to skip unchanged pages on re-ingest)
-    """
     folder = Path(docs_dir)
     if not folder.exists():
         log.error("Docs folder not found: %s", folder.resolve())
@@ -86,60 +66,48 @@ def load_pdfs(docs_dir: str = DOCS_DIR) -> list[Document]:
 
 # ── Semantic Chunker ───────────────────────────────────────────────────────────
 
-def semantic_chunk(pages: list[Document]) -> list[Document]:
-    """
-    Convert raw pages into semantic chunks.
+# def semantic_chunk(pages: list[Document]) -> list[Document]:
 
-    Algorithm (SemanticChunker):
-      1. Split text into sentences.
-      2. Embed each sentence with OpenAI embeddings.
-      3. Compute cosine distance between consecutive sentence embeddings.
-      4. Insert a chunk boundary wherever distance exceeds BREAKPOINT_VALUE
-         at the BREAKPOINT_TYPE percentile / std-dev / IQR level.
+#     if not pages:
+#         log.warning("No pages to chunk.")
+#         return []
 
-    Each chunk inherits the source metadata from its parent page and gets
-    two extra fields:
-      - chunk_index : sequential index across all chunks
-      - chunk_hash  : MD5 of chunk text (for deduplication)
-    """
-    if not pages:
-        log.warning("No pages to chunk.")
-        return []
+#     log.info(
+#         "Semantic chunking — breakpoint_type=%s, threshold=%.0f",
+#         BREAKPOINT_TYPE,
+#         BREAKPOINT_VALUE,
+#     )
+#     splitter_embeddings = OpenAIEmbeddings(
+#         model="text-embedding-3-small",
+#         openai_api_key=OPENAI_API_KEY,
+#     )
 
-    log.info(
-        "Semantic chunking — breakpoint_type=%s, threshold=%.0f",
-        BREAKPOINT_TYPE,
-        BREAKPOINT_VALUE,
+#     chunker = SemanticChunker(
+#         embeddings=splitter_embeddings,
+#         breakpoint_threshold_type=BREAKPOINT_TYPE,
+#         breakpoint_threshold_amount=BREAKPOINT_VALUE,
+#     )
+
+#     chunks: list[Document] = chunker.split_documents(pages)
+
+#     for idx, chunk in enumerate(chunks):
+#         chunk.metadata["chunk_index"] = idx
+#         chunk.metadata["chunk_hash"]  = _md5(chunk.page_content)
+
+#     log.info(
+#         "Produced %d chunks from %d pages (avg %.1f chunks/page)",
+#         len(chunks),
+#         len(pages),
+#         len(chunks) / max(len(pages), 1),
+#     )
+#     return chunks
+
+def semantic_chunk(pages):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
     )
-
-    # OpenAI embeddings are used here purely for semantic similarity during
-    # splitting. The same model is reused in embedder.py for storage.
-    splitter_embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-small",
-        openai_api_key=OPENAI_API_KEY,
-    )
-
-    chunker = SemanticChunker(
-        embeddings=splitter_embeddings,
-        breakpoint_threshold_type=BREAKPOINT_TYPE,
-        breakpoint_threshold_amount=BREAKPOINT_VALUE,
-    )
-
-    chunks: list[Document] = chunker.split_documents(pages)
-
-    for idx, chunk in enumerate(chunks):
-        chunk.metadata["chunk_index"] = idx
-        chunk.metadata["chunk_hash"]  = _md5(chunk.page_content)
-
-    log.info(
-        "Produced %d chunks from %d pages (avg %.1f chunks/page)",
-        len(chunks),
-        len(pages),
-        len(chunks) / max(len(pages), 1),
-    )
-    return chunks
-
-
+    return splitter.split_documents(pages)
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
 def _md5(text: str) -> str:
