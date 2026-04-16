@@ -2,8 +2,7 @@ import argparse
 import logging
 import sys
 import os
-
-# Add project root (Answer-externaldata) to Python path
+ 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(ROOT_DIR)
 

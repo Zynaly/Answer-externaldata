@@ -4,11 +4,6 @@ from langchain_core.prompts import (
     MessagesPlaceholder,
     SystemMessagePromptTemplate,
 )
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 1.  RAG prompt (Final Response Generation)
-# ══════════════════════════════════════════════════════════════════════════════
-
 SYSTEM_TEMPLATE = """You are a precise AI assistant. Answer using the provided context, 
 history, and live tool results.
 

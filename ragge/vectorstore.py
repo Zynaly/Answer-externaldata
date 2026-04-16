@@ -1,11 +1,3 @@
-"""
-vectorstore.py
-==============
-Responsibility: Create the Qdrant collection (if needed) and persist
-embedded document chunks into it. Also exposes a load_vectorstore()
-function that retriever.py uses to connect to an existing collection.
-"""
-
 import logging
 
 from langchain_core.documents import Document
