@@ -75,7 +75,4 @@ docker run -d -p 6333:6333 -p 6334:6334 \
     qdrant/qdrant
  
 
- docker run -p 8000:8000 \
-  -e QDRANT_URL="http://host.docker.internal:6333" \
-  -e GROQ_API_KEY="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" \
-  yourusername/answerchat-agent:v1
+ 
