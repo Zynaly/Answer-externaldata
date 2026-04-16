@@ -1,18 +1,3 @@
-"""
-runrag.py
-=========
-Main entry point. Two modes:
-
-  1. --ingest   Load PDFs → semantic chunk → embed → save to Qdrant
-  2. --chat     Interactive Q&A loop with full RAG + memory
-
-Usage:
-  python runrag.py --ingest              # populate Qdrant from docs/
-  python runrag.py --chat                # start chatting
-  python runrag.py --ingest --chat       # ingest first, then chat
-  python runrag.py --chat --question "What is the revenue in 2023?"  # one-shot
-"""
-
 import argparse
 import logging
 import sys

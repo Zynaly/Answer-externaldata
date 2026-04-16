@@ -20,7 +20,6 @@ from config.config import (
     BREAKPOINT_TYPE,
     BREAKPOINT_VALUE,
     DOCS_DIR,
-    OPENAI_API_KEY,
 )
 
 log = logging.getLogger(__name__)
